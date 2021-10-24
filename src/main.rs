@@ -1,8 +1,30 @@
+use clap::{IntoApp, Parser};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
+#[derive(Parser, Debug)]
+#[clap(
+    version,
+    about = "Formats and colorizes newline delimited JSON for better readability.\n\
+    The input remains unchanged for non-JSON lines or when stdout isn't a terminal.",
+    override_usage = "ndjson < file
+    tail -f file | ndjson
+    docker logs --tail 100 -f container 2>&1 | ndjson
+    kubectl logs --tail 100 -f pod | ndjson"
+)]
+struct Opt;
+
 fn main() -> io::Result<()> {
+    Opt::parse();
+
+    if atty::is(atty::Stream::Stdin) {
+        if atty::is(atty::Stream::Stdout) {
+            Opt::into_app().print_help()?;
+        }
+        std::process::exit(1);
+    }
+
     if !atty::is(atty::Stream::Stdout) {
         let mut stdin = io::stdin();
         let mut stdout = io::stdout();
