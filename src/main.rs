@@ -3,6 +3,13 @@ use std::io::{self, BufRead, Write};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 fn main() -> io::Result<()> {
+    if !atty::is(atty::Stream::Stdout) {
+        let mut stdin = io::stdin();
+        let mut stdout = io::stdout();
+        io::copy(&mut stdin, &mut stdout)?;
+        return Ok(());
+    }
+
     let stdin = io::stdin();
     let mut stdout = ColoredWriter::new(StandardStream::stdout(ColorChoice::Always));
 
