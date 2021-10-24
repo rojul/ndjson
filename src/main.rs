@@ -4,17 +4,18 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 fn main() -> io::Result<()> {
     let stdin = io::stdin();
-    let mut stdout = StandardStream::stdout(ColorChoice::Always);
+    let mut stdout = ColoredWriter::new(StandardStream::stdout(ColorChoice::Always));
 
     for line in stdin.lock().lines() {
         let line = line?;
         match serde_json::from_str(&line) {
             Ok(json) => {
                 write_object(&mut stdout, &json)?;
-                writeln!(&mut stdout)?;
+                stdout.write(TokenKind::None, "\n")?;
             }
             Err(_) => {
-                writeln!(&mut stdout, "{}", line)?;
+                stdout.write_raw(&line)?;
+                stdout.write_raw("\n")?;
             }
         }
     }
@@ -22,45 +23,84 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn write_value(stdout: &mut StandardStream, value: &Value) -> io::Result<()> {
+fn write_value(stdout: &mut ColoredWriter, value: &Value) -> io::Result<()> {
     match value {
-        Value::String(string) => write_colored(stdout, Color::Cyan, string),
+        Value::String(string) => stdout.write(TokenKind::String, string),
         Value::Array(array) => {
-            write!(stdout, "[")?;
+            stdout.write(TokenKind::None, "[")?;
             for (index, value) in array.iter().enumerate() {
                 if index != 0 {
-                    write!(stdout, ", ")?;
+                    stdout.write(TokenKind::None, ", ")?;
                 }
                 write_value(stdout, value)?;
             }
-            write!(stdout, "]")
+            stdout.write(TokenKind::None, "]")
         }
         Value::Object(object) => {
-            write!(stdout, "{{ ")?;
+            stdout.write(TokenKind::None, "{ ")?;
             write_object(stdout, object)?;
-            write!(stdout, " }}")
+            stdout.write(TokenKind::None, " }")
         }
-        _ => write_colored(stdout, Color::Green, &value.to_string()),
+        _ => stdout.write(TokenKind::Value, &value.to_string()),
     }
 }
 
 fn write_object(
-    stdout: &mut StandardStream,
+    stdout: &mut ColoredWriter,
     object: &serde_json::Map<String, Value>,
 ) -> io::Result<()> {
     for (index, (key, value)) in object.iter().enumerate() {
         if index != 0 {
-            write!(stdout, " ")?;
+            stdout.write_raw(" ")?;
         }
-        write_colored(stdout, Color::Yellow, key)?;
-        write!(stdout, ": ")?;
+        stdout.write(TokenKind::Key, key)?;
+        stdout.write(TokenKind::None, ": ")?;
         write_value(stdout, value)?;
     }
     Ok(())
 }
 
-fn write_colored(stdout: &mut StandardStream, color: Color, string: &str) -> io::Result<()> {
-    stdout.set_color(ColorSpec::new().set_fg(Some(color)).set_intense(true))?;
-    write!(stdout, "{}", string)?;
-    stdout.reset()
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum TokenKind {
+    None,
+    Key,
+    Value,
+    String,
+}
+
+struct ColoredWriter {
+    stream: StandardStream,
+    current: TokenKind,
+}
+
+impl ColoredWriter {
+    fn new(stream: StandardStream) -> Self {
+        ColoredWriter {
+            stream,
+            current: TokenKind::None,
+        }
+    }
+
+    fn write(&mut self, kind: TokenKind, string: &str) -> io::Result<()> {
+        if self.current != kind {
+            self.current = kind;
+            let color = match kind {
+                TokenKind::None => None,
+                TokenKind::Key => Some(Color::Yellow),
+                TokenKind::Value => Some(Color::Green),
+                TokenKind::String => Some(Color::Cyan),
+            };
+            match color {
+                None => self.stream.reset(),
+                Some(color) => self
+                    .stream
+                    .set_color(ColorSpec::new().set_fg(Some(color)).set_intense(true)),
+            }?;
+        }
+        self.write_raw(string)
+    }
+
+    fn write_raw(&mut self, string: &str) -> io::Result<()> {
+        self.stream.write_all(string.as_bytes())
+    }
 }
