@@ -38,15 +38,13 @@ fn main() -> io::Result<()> {
     for line in stdin.lock().lines() {
         let line = line?;
         match serde_json::from_str(&line) {
-            Ok(json) => {
-                write_object(&mut stdout, &json)?;
-                stdout.write(TokenKind::None, "\n")?;
+            Ok(Value::Object(object)) if !object.is_empty() => write_object(&mut stdout, &object),
+            Ok(value) if value.as_array().map_or(false, |array| !array.is_empty()) => {
+                write_value(&mut stdout, &value)
             }
-            Err(_) => {
-                stdout.write_raw(&line)?;
-                stdout.write_raw("\n")?;
-            }
-        }
+            _ => stdout.write(&line),
+        }?;
+        stdout.set_kind(TokenKind::None).write("\n")?;
     }
 
     Ok(())
@@ -54,23 +52,27 @@ fn main() -> io::Result<()> {
 
 fn write_value(stdout: &mut ColoredWriter, value: &Value) -> io::Result<()> {
     match value {
-        Value::String(string) => stdout.write(TokenKind::String, string),
+        Value::String(string) => stdout.set_kind(TokenKind::String).write(string),
         Value::Array(array) => {
-            stdout.write(TokenKind::None, "[")?;
+            stdout.set_kind(TokenKind::None).write("[")?;
             for (index, value) in array.iter().enumerate() {
                 if index != 0 {
-                    stdout.write(TokenKind::None, ", ")?;
+                    stdout.set_kind(TokenKind::None).write(", ")?;
                 }
                 write_value(stdout, value)?;
             }
-            stdout.write(TokenKind::None, "]")
+            stdout.set_kind(TokenKind::None).write("]")
         }
         Value::Object(object) => {
-            stdout.write(TokenKind::None, "{ ")?;
-            write_object(stdout, object)?;
-            stdout.write(TokenKind::None, " }")
+            if object.is_empty() {
+                stdout.set_kind(TokenKind::None).write("{}")
+            } else {
+                stdout.set_kind(TokenKind::None).write("{ ")?;
+                write_object(stdout, object)?;
+                stdout.set_kind(TokenKind::None).write(" }")
+            }
         }
-        _ => stdout.write(TokenKind::Value, &value.to_string()),
+        _ => stdout.set_kind(TokenKind::Value).write(&value.to_string()),
     }
 }
 
@@ -80,10 +82,10 @@ fn write_object(
 ) -> io::Result<()> {
     for (index, (key, value)) in object.iter().enumerate() {
         if index != 0 {
-            stdout.write_raw(" ")?;
+            stdout.write(" ")?;
         }
-        stdout.write(TokenKind::Key, key)?;
-        stdout.write(TokenKind::None, ": ")?;
+        stdout.set_kind(TokenKind::Key).write(key)?;
+        stdout.set_kind(TokenKind::None).write(": ")?;
         write_value(stdout, value)?;
     }
     Ok(())
@@ -99,21 +101,33 @@ enum TokenKind {
 
 struct ColoredWriter {
     stream: StandardStream,
-    current: TokenKind,
+    kind: TokenKind,
+    deferred: bool,
 }
 
 impl ColoredWriter {
     fn new(stream: StandardStream) -> Self {
         ColoredWriter {
             stream,
-            current: TokenKind::None,
+            kind: TokenKind::None,
+            deferred: false,
         }
     }
 
-    fn write(&mut self, kind: TokenKind, string: &str) -> io::Result<()> {
-        if self.current != kind {
-            self.current = kind;
-            let color = match kind {
+    pub fn set_kind(&mut self, kind: TokenKind) -> &mut Self {
+        if self.kind != kind {
+            self.kind = kind;
+            self.deferred = true;
+        }
+        self
+    }
+
+    fn write(&mut self, string: &str) -> io::Result<()> {
+        if string.is_empty() {
+            return Ok(());
+        }
+        if self.deferred {
+            let color = match self.kind {
                 TokenKind::None => None,
                 TokenKind::Key => Some(Color::Yellow),
                 TokenKind::Value => Some(Color::Green),
@@ -125,11 +139,8 @@ impl ColoredWriter {
                     .stream
                     .set_color(ColorSpec::new().set_fg(Some(color)).set_intense(true)),
             }?;
+            self.deferred = false
         }
-        self.write_raw(string)
-    }
-
-    fn write_raw(&mut self, string: &str) -> io::Result<()> {
         self.stream.write_all(string.as_bytes())
     }
 }
