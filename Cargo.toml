@@ -2,6 +2,10 @@
 name = "ndjson"
 version = "0.1.0"
 edition = "2018"
+description = "Formats and colorizes newline delimited JSON for better readability."
+readme = "README.md"
+repository = "https://github.com/rojul/ndjson"
+license = "MIT"
 
 [dependencies]
 atty = "0.2"
