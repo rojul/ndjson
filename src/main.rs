@@ -44,13 +44,17 @@ fn main() -> io::Result<()> {
 
 fn write_line<T: WriteColor>(writer: &mut ColoredWriter<T>, line: &str) -> io::Result<()> {
     match serde_json::from_str(line) {
-        Ok(Value::Object(object)) if !object.is_empty() => write_object(writer, &object),
-        Ok(value) if value.as_array().map_or(false, |array| !array.is_empty()) => {
-            write_value(writer, &value)
+        Ok(Value::Object(object)) if !object.is_empty() => {
+            write_object(writer, &object)?;
+            writer.set_kind(TokenKind::None);
         }
-        _ => writer.write(line),
-    }?;
-    writer.set_kind(TokenKind::None).write("\n")
+        Ok(value) if value.as_array().map_or(false, |array| !array.is_empty()) => {
+            write_value(writer, &value)?;
+            writer.set_kind(TokenKind::None);
+        }
+        _ => writer.set_kind(TokenKind::Unknown).write(line)?,
+    }
+    writer.write("\n")
 }
 
 fn write_value<T: WriteColor>(writer: &mut ColoredWriter<T>, value: &Value) -> io::Result<()> {
@@ -96,6 +100,7 @@ fn write_object<T: WriteColor>(
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum TokenKind {
+    Unknown,
     None,
     Key,
     Value,
@@ -104,23 +109,23 @@ enum TokenKind {
 
 struct ColoredWriter<T: WriteColor> {
     writer: T,
-    kind: TokenKind,
-    deferred: bool,
+    current_kind: TokenKind,
+    written_kind: TokenKind,
 }
 
 impl<T: WriteColor> ColoredWriter<T> {
     pub fn new(writer: T) -> Self {
         ColoredWriter {
             writer,
-            kind: TokenKind::None,
-            deferred: false,
+            current_kind: TokenKind::Unknown,
+            written_kind: TokenKind::Unknown,
         }
     }
 
     pub fn set_kind(&mut self, kind: TokenKind) -> &mut Self {
-        if self.kind != kind {
-            self.kind = kind;
-            self.deferred = true;
+        self.current_kind = kind;
+        if kind == TokenKind::Unknown {
+            self.written_kind = kind;
         }
         self
     }
@@ -129,20 +134,21 @@ impl<T: WriteColor> ColoredWriter<T> {
         if string.is_empty() {
             return Ok(());
         }
-        if self.deferred {
-            let color = match self.kind {
-                TokenKind::None => None,
+        if self.written_kind != self.current_kind {
+            let color = match self.current_kind {
+                TokenKind::None | TokenKind::Unknown => None,
                 TokenKind::Key => Some(Color::Yellow),
                 TokenKind::Value => Some(Color::Green),
                 TokenKind::String => Some(Color::Cyan),
             };
             match color {
-                None => self.writer.reset(),
+                _ if self.current_kind == TokenKind::Unknown => {}
+                None => self.writer.reset()?,
                 Some(color) => self
                     .writer
-                    .set_color(ColorSpec::new().set_fg(Some(color)).set_intense(true)),
-            }?;
-            self.deferred = false
+                    .set_color(ColorSpec::new().set_fg(Some(color)).set_intense(true))?,
+            };
+            self.written_kind = self.current_kind
         }
         self.writer.write_all(string.as_bytes())
     }
@@ -155,7 +161,9 @@ mod tests {
 
     fn format(buffer: Buffer, input: &str) -> String {
         let mut buffer = ColoredWriter::new(buffer);
-        write_line(&mut buffer, input).unwrap();
+        for line in input.split('\n') {
+            write_line(&mut buffer, line).unwrap();
+        }
         let mut output = String::from_utf8(buffer.writer.into_inner()).unwrap();
         assert_eq!(output.pop(), Some('\n'));
         output
@@ -170,6 +178,7 @@ mod tests {
             ),
             "[0m[38;5;11mnull[0m: [0m[38;5;10mnull [0m[38;5;11mstring[0m: [0m[38;5;14mstring [0m[38;5;11marray[0m: [[0m[38;5;10m1[0m] [0m[38;5;11mobject[0m: { [0m[38;5;11mkey[0m: [0m[38;5;14mvalue[0m }"
         );
+        assert_eq!(format(Buffer::ansi(), r#"[""]"#), "[0m[]");
     }
 
     #[test]
